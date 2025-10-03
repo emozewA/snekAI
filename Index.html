@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nokia Snake</title>
+  <style>
+    html, body { height: 100%; margin: 0; background:#0b1b0b; font-family: monospace; color:#cfe8cf;}
+    .frame {
+      max-width: 460px; margin: 24px auto 40px auto; padding: 16px;
+      background:#0f2a0f; border: 4px solid #1c4a1c; border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.4);
+    }
+    h1 { text-align:center; margin: 8px 0 12px 0; font-weight: 700; letter-spacing:1px;}
+    .screen {
+      background:#153a15; border:3px solid #296329; border-radius:8px;
+      padding: 8px; display:flex; flex-direction:column; gap:8px;
+    }
+    .row { display:flex; justify-content:space-between; align-items:center; font-size:14px; gap:8px; }
+    .row.wrap { flex-wrap: wrap; }
+    .col { display:flex; align-items:center; gap:6px; }
+    canvas { width:100%; height:auto; image-rendering: pixelated; background:#a9d4a9; }
+    .controls { display:flex; justify-content:space-between; gap:8px; margin-top:10px; flex-wrap:wrap;}
+    button {
+      flex:1; padding:10px; background:#1d5a1d; color:#cfe8cf; border:2px solid #296329; border-radius:10px;
+      font-weight:700; cursor:pointer;
+    }
+    button.secondary { background:#134813; }
+    button.warn { background:#5a1d1d; border-color:#7a3030; }
+    button:active { transform: translateY(1px); }
+    .small { font-size:12px; opacity:.9; }
+    .blink { animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0.2; } }
+    a { color:#d8ffd8; }
+    select, input[type="range"], input[type="text"] {
+      background:#0f2a0f; color:#cfe8cf; border:2px solid #296329; border-radius:8px; padding:4px;
+      font-family: monospace;
+    }
+    input[type="text"]{ width:110px; }
+    details { background:#123412; border:2px solid #296329; border-radius:10px; padding:8px; }
+    summary { cursor:pointer; font-weight:700; }
+    table { width:100%; border-collapse: collapse; font-size:12px; }
+    th, td { padding:4px 6px; border-bottom:1px solid #296329; text-align:left; }
+    .namecell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <h1>Snek AI, by emozewA</h1>
+    <div class="screen">
+      <div class="row wrap">
+        <div class="col">Score: <span id="score">0</span></div>
+        <div class="col small">Hi: <span id="hi">0</span></div>
+        <div class="col small">Name:
+          <input id="Username" type="text" maxlength="12" placeholder="Enter Here">
+        </div>
+        <div class="col small">Difficulty:
+          <select id="difficulty">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="hard">Hard</option>
+            <option value="classic">Classic</option>
+          </select>
+        </div>
+        <div class="col small" style="flex:1 1 100%;">
+          Speed (ms/step): <input id="speed" type="range" min="60" max="220" step="5" value="120">
+          <span id="speedVal">120</span>
+        </div>
+      </div>
+
+      <canvas id="board" width="240" height="240" aria-label="Game board" role="img"></canvas>
+      <div id="status" class="small blink" style="text-align:center;">Press any arrow/WASD or tap START</div>
+
+      <details>
+        <summary>Highscores</summary>
+        <div class="small">Per-difficulty top 10 (local only)</div>
+        <div id="hiscoreTables" class="small"></div>
+      </details>
+    </div>
+
+    <div class="controls">
+      <button id="startBtn">START</button>
+      <button id="pauseBtn" class="secondary">PAUSE</button>
+      <button id="resetBtn" class="secondary">RESET</button>
+      <button id="clearHS" class="secondary">CLEAR HS</button>
+    </div>
+
+    <p class="small" style="text-align:center;">
+      Use arrows / WASD. On mobile, use the buttons and swipe on the screen.
+    </p>
+    <p class="small" style="text-align:center;">
+      Minimal, clean, and 0 telemetry.
+    </p>
+  </div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d', { alpha:false });
+  const status = document.getElementById('status');
+  const scoreEl = document.getElementById('score');
+  const hiEl = document.getElementById('hi');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const clearBtn = document.getElementById('clearHS');
+  const difficultySel = document.getElementById('difficulty');
+  const speedRange = document.getElementById('speed');
+  const speedVal = document.getElementById('speedVal');
+  const tablesRoot = document.getElementById('hiscoreTables');
+  const nameInput = document.getElementById('playerName');
+
+  const TILE = 12;
+  const COLS = Math.floor(canvas.width / TILE);
+  const ROWS = Math.floor(canvas.height / TILE);
+
+  const DIFFS = {
+    easy:   { accel: 1,   wrap: true,  foodValue: 10 },
+    normal: { accel: 2,   wrap: true,  foodValue: 10 },
+    hard:   { accel: 3,   wrap: false, foodValue: 12 },
+    classic:{ accel: 2,   wrap: true,  foodValue: 10 } // classic Nokia wrap
+  };
+
+  let snake, dir, nextDir, food, loop, speed, score, hi, paused, alive;
+
+  function loadOpts(){
+    const saved = JSON.parse(localStorage.getItem('snake_opts_v3')||'{}');
+    if (saved.difficulty) difficultySel.value = saved.difficulty;
+    if (saved.speed) speedRange.value = saved.speed;
+    if (saved.name) nameInput.value = saved.name;
+    speedVal.textContent = speedRange.value;
+  }
+  function saveOpts(){
+    localStorage.setItem('snake_opts_v3', JSON.stringify({
+      difficulty: difficultySel.value,
+      speed: Number(speedRange.value),
+      name: nameInput.value.trim().slice(0,12) || 'AAA'
+    }));
+  }
+  difficultySel.addEventListener('change', ()=>{ saveOpts(); updateHi(); renderHiscoreTables(); });
+  speedRange.addEventListener('input', ()=>{ speedVal.textContent = speedRange.value; saveOpts(); });
+  nameInput.addEventListener('input', ()=>{ saveOpts(); });
+
+  function init() {
+    const diff = DIFFS[difficultySel.value];
+    snake = [{x: Math.floor(COLS/2), y: Math.floor(ROWS/2)}];
+    dir = {x:1, y:0}; nextDir = {...dir};
+    food = spawnFood();
+    speed = Number(speedRange.value);
+    score = 0; paused = false; alive = true;
+    scoreEl.textContent = score;
+    updateHi();
+    status.textContent = "Go!";
+    clearInterval(loop);
+    loop = setInterval(step, speed);
+    draw();
+  }
+
+  function updateHi(){
+    const key = 'snake_hi_'+difficultySel.value;
+    hi = Number(localStorage.getItem(key)||0);
+    hiEl.textContent = hi;
+  }
+
+  function spawnFood() {
+    while (true) {
+      const p = { x: Math.floor(Math.random()*COLS), y: Math.floor(Math.random()*ROWS) };
+      if (!snake.some(s => s.x===p.x && s.y===p.y)) return p;
+    }
+  }
+
+  function step(){
+    if (paused || !alive) return;
+    const diff = DIFFS[difficultySel.value];
+    dir = nextDir;
+    const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+    if (diff.wrap) {
+      if (head.x < 0) head.x = COLS-1;
+      if (head.x >= COLS) head.x = 0;
+      if (head.y < 0) head.y = ROWS-1;
+      if (head.y >= ROWS) head.y = 0;
+    } else {
+      if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) return gameOver();
+    }
+
+    if (snake.some(s => s.x===head.x && s.y===head.y)) return gameOver();
+
+    snake.unshift(head);
+
+    if (head.x === food.x && head.y === food.y) {
+      score += diff.foodValue;
+      scoreEl.textContent = score;
+      const key = 'snake_hi_'+difficultySel.value;
+      if (score > hi) { hi = score; hiEl.textContent = hi; localStorage.setItem(key, hi); }
+      food = spawnFood();
+      speed = Math.max(40, speed - diff.accel);
+      clearInterval(loop);
+      loop = setInterval(step, speed);
+    } else {
+      snake.pop();
+    }
+
+    draw();
+  }
+
+  function draw(){
+    ctx.fillStyle = '#a9d4a9';
+    ctx.fillRect(0,0,canvas.width, canvas.height);
+
+    ctx.fillStyle = '#9ac99a';
+    for (let x=0;x<COLS;x++){
+      for (let y=0;y<ROWS;y++){
+        if ((x+y)%2===0) ctx.fillRect(x*TILE, y*TILE, 1, 1);
+      }
+    }
+
+    ctx.fillStyle = '#234';
+    ctx.fillRect(food.x*TILE, food.y*TILE, TILE, TILE);
+
+    ctx.fillStyle = '#153a15';
+    snake.forEach((s)=>{
+      ctx.fillRect(s.x*TILE, s.y*TILE, TILE, TILE);
+    });
+  }
+
+  function setDir(nx, ny){
+    if (nx === -dir.x && ny === -dir.y) return;
+    nextDir = {x:nx, y:ny};
+  }
+
+  function gameOver(){
+    alive = false;
+    clearInterval(loop);
+    status.textContent = "Game Over — press START";
+    tryStoreHighscore(score);
+  }
+
+  document.addEventListener('keydown', (e)=>{
+    const k = e.key.toLowerCase();
+    if (k === 'arrowup' || k === 'w') setDir(0,-1);
+    else if (k === 'arrowdown' || k === 's') setDir(0,1);
+    else if (k === 'arrowleft' || k === 'a') setDir(-1,0);
+    else if (k === 'arrowright' || k === 'd') setDir(1,0);
+  }, {passive:true});
+
+  let touchStart = null;
+  canvas.addEventListener('touchstart', (e)=>{
+    const t = e.changedTouches[0];
+    touchStart = {x: t.clientX, y: t.clientY};
+  }, {passive:true});
+  canvas.addEventListener('touchend', (e)=>{
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    if (Math.abs(dx) > Math.abs(dy)) setDir(dx>0 ? 1 : -1, 0);
+    else setDir(0, dy>0 ? 1 : -1);
+    touchStart = null;
+  }, {passive:true});
+
+  startBtn.addEventListener('click', ()=>{
+    if (!alive) { init(); return; }
+    clearInterval(loop);
+    loop = setInterval(step, speed);
+    paused = false;
+    status.textContent = "Playing";
+  });
+  pauseBtn.addEventListener('click', ()=>{
+    paused = !paused;
+    status.textContent = paused ? "Paused" : "Playing";
+  });
+  resetBtn.addEventListener('click', ()=>{
+    clearInterval(loop);
+    init();
+  });
+
+  // Promptless CLEAR HS: requires two clicks within 5s
+  let clearArmed = false;
+  let clearTimer = null;
+  clearBtn.addEventListener('click', ()=>{
+    if (!clearArmed) {
+      clearArmed = true;
+      clearBtn.textContent = 'CONFIRM CLEAR (5s)';
+      clearBtn.classList.add('warn');
+      clearTimer = setTimeout(()=>{
+        clearArmed = false;
+        clearBtn.textContent = 'CLEAR HS';
+        clearBtn.classList.remove('warn');
+      }, 5000);
+      return;
+    }
+    // Confirmed
+    if (clearTimer) clearTimeout(clearTimer);
+    clearArmed = false;
+    clearBtn.textContent = 'CLEAR HS';
+    clearBtn.classList.remove('warn');
+    ['easy','normal','hard','classic'].forEach(d=>{
+      localStorage.removeItem('snake_hi_'+d);
+      localStorage.removeItem('snake_board_'+d);
+    });
+    updateHi();
+    renderHiscoreTables();
+  });
+
+  // Highscore storage without prompts
+  function tryStoreHighscore(score){
+    const diff = difficultySel.value;
+    const key = 'snake_board_'+diff;
+    const name = (nameInput.value.trim().slice(0,12) || 'AAA');
+    const rec = { name, score, ts: Date.now(), speedStart: Number(speedRange.value) };
+    const board = JSON.parse(localStorage.getItem(key) || '[]');
+    board.push(rec);
+    board.sort((a,b)=> b.score - a.score || a.ts - b.ts);
+    const top = board.slice(0, 10);
+    localStorage.setItem(key, JSON.stringify(top));
+    renderHiscoreTables();
+  }
+
+  function renderHiscoreTables(){
+    const diffs = ['easy','normal','hard','classic'];
+    let html = '';
+    diffs.forEach(d=>{
+      const board = JSON.parse(localStorage.getItem('snake_board_'+d) || '[]');
+      if (!board.length) return;
+      html += '<h4 style="margin:8px 0 2px 0;">'+d.toUpperCase()+'</h4>';
+      html += '<table><thead><tr><th>#</th><th class="namecell">Name</th><th>Score</th><th>Speed</th><th>When</th></tr></thead><tbody>';
+      board.forEach((r, i)=>{
+        const when = new Date(r.ts).toLocaleString();
+        html += '<tr><td>'+(i+1)+'</td><td class="namecell">'+escapeHtml(r.name)+'</td><td>'+r.score+'</td><td>'+r.speedStart+'ms</td><td>'+when+'</td></tr>';
+      });
+      html += '</tbody></table>';
+    });
+    tablesRoot.innerHTML = html || '<div class="small">No highscores yet. Play a round!</div>';
+  }
+
+  function escapeHtml(s){
+    return s.replace(/[&<>"']/g, (c)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  // Boot
+  loadOpts();
+  renderHiscoreTables();
+  // If no stored name, set placeholder from last name if any (v2) for migration
+  if (!nameInput.value) nameInput.value = (JSON.parse(localStorage.getItem('snake_opts_v3')||'{}').name || localStorage.getItem('snake_last_name') || 'AAA');
+  init();
+})();
+</script>
+</body>
+</html>
